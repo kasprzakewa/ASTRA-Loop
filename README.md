@@ -1,6 +1,6 @@
-# ASTRA-L
+# ASTRA-Loop
 
-**ASTRA-L** is a Software-in-the-Loop (SITL) simulation environment for testing apogee prediction algorithms and airbrake control strategies on experimental student rocket flight data.
+**ASTRA-Loop** is a Software-in-the-Loop (SITL) simulation environment for testing apogee prediction algorithms and airbrake control strategies on experimental student rocket flight data.
 
 ## Requirements
 
