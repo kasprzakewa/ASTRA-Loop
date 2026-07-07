@@ -12,10 +12,12 @@ from core.controllers.base import Controller
 from core.data_loader import DataLoader
 from core.evaluator import EvaluationMetrics, Evaluator
 from core.filters.base import Filter
+from core.flight_schema import collect_validation_errors
 from core.physics_utils import ModelParams
 from core.predictors.base import Predictor
 from core.registry import discover_plugins
 from core.simulation_engine import SimulationEngine, SimulationResult
+from gui.error_dialog import ErrorDialog
 from gui.params_dialog import ModelParamsDialog
 from gui.theme import (
     ACCENT_ORANGE,
@@ -89,12 +91,13 @@ class AstraApp(ctk.CTk):
 
         self._filter_var = tk.StringVar(value=self._default_key(self._filters, preferred="NoFilter"))
         self._predictor_var = tk.StringVar(value=self._default_key(self._predictors))
-        self._controller_var = tk.StringVar(value=self._default_key(self._controllers))
+        self._controller_var = tk.StringVar(value=self._default_key(self._controllers, preferred="NoController"))
 
         filter_options = sorted(self._filters.keys(), key=lambda name: (name != "NoFilter", name))
+        controller_options = sorted(self._controllers.keys(), key=lambda name: (name != "NoController", name))
         self._add_selector(scroll, "Filter", self._filter_var, filter_options)
         self._add_selector(scroll, "Predictor", self._predictor_var, list(self._predictors.keys()))
-        self._add_selector(scroll, "Controller", self._controller_var, list(self._controllers.keys()))
+        self._add_selector(scroll, "Controller", self._controller_var, controller_options)
 
         self._params_btn = ctk.CTkButton(
             scroll,
@@ -108,6 +111,20 @@ class AstraApp(ctk.CTk):
         )
         self._params_btn.pack(padx=16, pady=(8, 4), fill="x")
 
+        self._show_from_burnout_var = tk.BooleanVar(value=False)
+        self._show_from_burnout_cb = ctk.CTkCheckBox(
+            scroll,
+            text="Show from Burnout",
+            variable=self._show_from_burnout_var,
+            command=self._on_plot_options_changed,
+            fg_color=ACCENT_PINK,
+            hover_color=self._darken(ACCENT_PINK),
+            border_color=ACCENT_ORANGE,
+            checkmark_color=TEXT_PRIMARY,
+            text_color=TEXT_PRIMARY,
+        )
+        self._show_from_burnout_cb.pack(padx=16, pady=(12, 4), anchor="w")
+
         self._show_until_apogee_var = tk.BooleanVar(value=False)
         self._show_until_apogee_cb = ctk.CTkCheckBox(
             scroll,
@@ -120,7 +137,7 @@ class AstraApp(ctk.CTk):
             checkmark_color=TEXT_PRIMARY,
             text_color=TEXT_PRIMARY,
         )
-        self._show_until_apogee_cb.pack(padx=16, pady=(12, 8), anchor="w")
+        self._show_until_apogee_cb.pack(padx=16, pady=(4, 8), anchor="w")
 
         self._run_btn = ctk.CTkButton(
             scroll,
@@ -306,6 +323,21 @@ class AstraApp(ctk.CTk):
             messagebox.showerror("Configuration Error", "Select valid filter, predictor, and controller.")
             return
 
+        validation_errors = collect_validation_errors(
+            self._data_loader.columns,
+            filter_cls,
+            predictor_cls,
+            controller_cls,
+        )
+        if validation_errors:
+            ErrorDialog.show(
+                self,
+                title="Brakujące kolumny CSV",
+                message="Wybrane algorytmy wymagają kolumn, których nie ma w załadowanym pliku:",
+                details=validation_errors,
+            )
+            return
+
         try:
             engine = SimulationEngine(
                 data_loader=self._data_loader,
@@ -317,7 +349,11 @@ class AstraApp(ctk.CTk):
             self._last_result = result
 
             self._refresh_plots()
-            metrics = self._evaluator.evaluate(result)
+            metrics = self._evaluator.evaluate(
+                result,
+                predictor_cls=predictor_cls,
+                controller_cls=controller_cls,
+            )
             self._update_metrics(metrics)
 
         except Exception as exc:
@@ -331,6 +367,7 @@ class AstraApp(ctk.CTk):
             return
         self._visualizer.plot(
             self._last_result,
+            show_from_burnout=self._show_from_burnout_var.get(),
             show_until_apogee=self._show_until_apogee_var.get(),
         )
 
@@ -343,11 +380,20 @@ class AstraApp(ctk.CTk):
             text_color=TEXT_PRIMARY if highlight else TEXT_MUTED,
         )
 
+    def _format_metric(self, value: float | None, na_reason: str | None, *, unit: str) -> str:
+        if value is not None:
+            if unit == "m":
+                return f"{value:.2f} m"
+            if unit:
+                return f"{value:.3f} {unit}"
+            return f"{value:.3f}"
+        return f"N/A ({na_reason})"
+
     def _update_metrics(self, metrics: EvaluationMetrics) -> None:
         text = (
-            f"Altitude RMSE: {metrics.altitude_rmse:.2f} m\n"
-            f"Apogee Error: {metrics.apogee_error:.2f} m\n"
-            f"Max Overshoot: {metrics.max_overshoot:.3f}\n"
+            f"Altitude RMSE: {self._format_metric(metrics.altitude_rmse, metrics.altitude_rmse_na_reason, unit='m')}\n"
+            f"Apogee Error: {self._format_metric(metrics.apogee_error, metrics.apogee_error_na_reason, unit='m')}\n"
+            f"Max Overshoot: {self._format_metric(metrics.max_overshoot, metrics.max_overshoot_na_reason, unit='')}\n"
             f"Mean Exec Time: {metrics.mean_execution_time_ms:.3f} ms\n"
             f"Max Exec Time: {metrics.max_execution_time_ms:.3f} ms"
         )

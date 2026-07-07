@@ -39,3 +39,35 @@ def calculate_speed(diff_pressure: float, altitude: float, params: ModelParams) 
     if rho <= 0.0:
         return 0.0
     return math.sqrt(2.0 * diff_pressure / rho)
+
+
+def propagate_coast_to_apogee_euler(
+    z: float,
+    vz: float,
+    v_lat_sq: float,
+    params: ModelParams,
+    dt: float = 0.01,
+    max_steps: int = 100_000,
+) -> tuple[float, float]:
+    """Integrate coast-phase motion until v_z <= 0. Returns (z_apogee, time_to_apogee)."""
+    if vz <= 0.0:
+        return z, 0.0
+
+    mass = params.default_mass
+    drag_coefficient = params.default_drag_coefficient
+    cross_section = params.default_cross_section
+    gravity = params.g
+
+    steps = 0
+    while vz > 0.0 and steps < max_steps:
+        speed = math.sqrt(v_lat_sq + vz * vz)
+        rho = calculate_air_density(z, params)
+        k = -0.5 / mass * rho * drag_coefficient * cross_section * speed
+
+        z += vz * dt
+        v_lat_sq += 2.0 * k * v_lat_sq * dt
+        v_lat_sq = max(v_lat_sq, 0.0)
+        vz += (-gravity + k * vz) * dt
+        steps += 1
+
+    return z, steps * dt

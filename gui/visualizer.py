@@ -8,7 +8,7 @@ from matplotlib.axes import Axes
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from core.simulation_engine import SimulationResult, slice_to_apogee
+from core.simulation_engine import SimulationResult, slice_flight_window
 from gui.theme import ACCENT_ORANGE, ACCENT_PINK, BG_DARK, GRID_COLOR, TEXT_MUTED, TEXT_PRIMARY
 
 
@@ -29,8 +29,18 @@ class Visualizer:
         self._figures[tab_name] = figure
         self._canvases[tab_name] = canvas
 
-    def plot(self, result: SimulationResult, *, show_until_apogee: bool = False) -> None:
-        plot_data = slice_to_apogee(result) if show_until_apogee else result
+    def plot(
+        self,
+        result: SimulationResult,
+        *,
+        show_from_burnout: bool = False,
+        show_until_apogee: bool = False,
+    ) -> None:
+        plot_data = slice_flight_window(
+            result,
+            from_burnout=show_from_burnout,
+            until_apogee=show_until_apogee,
+        )
 
         self._plot_altitude(plot_data)
         self._plot_apogee(plot_data)
@@ -49,9 +59,9 @@ class Visualizer:
         time = np.array(result.time)
 
         if self._has_valid_data(result.logged_true_altitude):
-            self._glow_line(ax, time, result.logged_true_altitude, ACCENT_PINK, label="True Altitude")
+            self._line(ax, time, result.logged_true_altitude, ACCENT_PINK, label="True Altitude")
         if self._has_valid_data(result.logged_altitude):
-            self._glow_line(
+            self._line(
                 ax,
                 time,
                 result.logged_altitude,
@@ -73,15 +83,16 @@ class Visualizer:
         ax = figure.add_subplot(111)
         time = np.array(result.time)
 
-        self._glow_line(
-            ax,
-            time,
-            result.logged_predicted_apogee,
-            ACCENT_PINK,
-            label="Predicted Apogee",
-        )
+        if self._has_valid_data(result.logged_predicted_apogee):
+            self._line(
+                ax,
+                time,
+                result.logged_predicted_apogee,
+                ACCENT_PINK,
+                label="Predicted Apogee",
+            )
         if self._has_valid_data(result.logged_altitude):
-            self._glow_line(
+            self._line(
                 ax,
                 time,
                 result.logged_altitude,
@@ -102,13 +113,13 @@ class Visualizer:
         ax = figure.add_subplot(111)
         time = np.array(result.time)
 
-        self._glow_line(ax, time, result.logged_control_signal, ACCENT_ORANGE, label="Control Signal")
+        self._line(ax, time, result.logged_control_signal, ACCENT_ORANGE, label="Control Signal")
         self._style_axes(ax, "Control Signal vs Time", "Time [s]", "Signal [0-1]")
         self._autoscale(ax)
         ax.set_ylim(-0.05, 1.05)
         figure.tight_layout()
 
-    def _glow_line(
+    def _line(
         self,
         ax: Axes,
         x: np.ndarray,
@@ -119,7 +130,6 @@ class Visualizer:
         linewidth: float = 1.8,
     ) -> None:
         y_arr = np.array(y, dtype=float)
-        ax.plot(x, y_arr, color=color, linewidth=linewidth + 5, alpha=0.18, linestyle=linestyle)
         ax.plot(x, y_arr, color=color, linewidth=linewidth, linestyle=linestyle, label=label)
 
     def _style_axes(self, ax: Axes, title: str, xlabel: str, ylabel: str) -> None:

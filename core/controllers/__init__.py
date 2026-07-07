@@ -1,4 +1,4 @@
 from core.controllers.base import Controller
-from core.controllers.pid_controller import PIDController
+from core.controllers.no_controller import NoController
 
-__all__ = ["Controller", "PIDController"]
+__all__ = ["Controller", "NoController"]
