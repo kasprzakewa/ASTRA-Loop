@@ -4,7 +4,7 @@ import math
 from typing import Any
 
 from core.flight_schema import get_field, lateral_velocity_sq
-from core.physics_utils import ModelParams, propagate_coast_to_apogee_euler
+from core.physics_utils import CoastSolver, ModelParams, propagate_coast_to_apogee
 from core.predictors.base import Predictor
 
 
@@ -12,9 +12,15 @@ class ApogeePredict3D(Predictor):
     required_columns = ("position_z", "velocity_z")
     produced_fields = ("predicted_apogee", "time_to_apogee")
 
-    def __init__(self, params: ModelParams | None = None, dt: float = 0.01) -> None:
+    def __init__(
+        self,
+        params: ModelParams | None = None,
+        dt: float = 0.01,
+        solver: CoastSolver = "euler",
+    ) -> None:
         self._params = params or ModelParams()
         self._dt = dt
+        self._solver = solver
 
     def reset(self) -> None:
         pass
@@ -43,11 +49,12 @@ class ApogeePredict3D(Predictor):
             predicted_apogee = position_z
             time_to_apogee = 0.0
         else:
-            predicted_apogee, time_to_apogee = propagate_coast_to_apogee_euler(
+            predicted_apogee, time_to_apogee = propagate_coast_to_apogee(
                 position_z,
                 velocity_z,
                 v_lat_sq,
                 self._params,
+                solver=self._solver,
                 dt=self._dt,
             )
 

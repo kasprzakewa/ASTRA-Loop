@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
+
+CoastSolver = Literal["euler", "rk4"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,29 @@ def calculate_speed(diff_pressure: float, altitude: float, params: ModelParams) 
     return math.sqrt(2.0 * diff_pressure / rho)
 
 
+def _coast_derivatives(
+    z: float,
+    vz: float,
+    v_lat_sq: float,
+    params: ModelParams,
+) -> tuple[float, float, float]:
+    """Return (dz/dt, dvz/dt, d(v_lat_sq)/dt) for coast phase with quadratic drag."""
+    speed = math.sqrt(max(v_lat_sq, 0.0) + vz * vz)
+    rho = calculate_air_density(z, params)
+    k = (
+        -0.5
+        / params.default_mass
+        * rho
+        * params.default_drag_coefficient
+        * params.default_cross_section
+        * speed
+    )
+    dz_dt = vz
+    dvz_dt = -params.g + k * vz
+    dv_lat_sq_dt = 2.0 * k * v_lat_sq
+    return dz_dt, dvz_dt, dv_lat_sq_dt
+
+
 def propagate_coast_to_apogee_euler(
     z: float,
     vz: float,
@@ -49,25 +75,76 @@ def propagate_coast_to_apogee_euler(
     dt: float = 0.01,
     max_steps: int = 100_000,
 ) -> tuple[float, float]:
-    """Integrate coast-phase motion until v_z <= 0. Returns (z_apogee, time_to_apogee)."""
+    """Integrate coast-phase motion with forward Euler until v_z <= 0."""
     if vz <= 0.0:
         return z, 0.0
 
-    mass = params.default_mass
-    drag_coefficient = params.default_drag_coefficient
-    cross_section = params.default_cross_section
-    gravity = params.g
-
     steps = 0
     while vz > 0.0 and steps < max_steps:
-        speed = math.sqrt(v_lat_sq + vz * vz)
-        rho = calculate_air_density(z, params)
-        k = -0.5 / mass * rho * drag_coefficient * cross_section * speed
-
-        z += vz * dt
-        v_lat_sq += 2.0 * k * v_lat_sq * dt
-        v_lat_sq = max(v_lat_sq, 0.0)
-        vz += (-gravity + k * vz) * dt
+        dz_dt, dvz_dt, dv_lat_sq_dt = _coast_derivatives(z, vz, v_lat_sq, params)
+        z += dz_dt * dt
+        vz += dvz_dt * dt
+        v_lat_sq = max(v_lat_sq + dv_lat_sq_dt * dt, 0.0)
         steps += 1
 
     return z, steps * dt
+
+
+def propagate_coast_to_apogee_rk4(
+    z: float,
+    vz: float,
+    v_lat_sq: float,
+    params: ModelParams,
+    dt: float = 0.01,
+    max_steps: int = 100_000,
+) -> tuple[float, float]:
+    """Integrate coast-phase motion with classic RK4 until v_z <= 0."""
+    if vz <= 0.0:
+        return z, 0.0
+
+    steps = 0
+    while vz > 0.0 and steps < max_steps:
+        k1z, k1vz, k1vls = _coast_derivatives(z, vz, v_lat_sq, params)
+        k2z, k2vz, k2vls = _coast_derivatives(
+            z + 0.5 * dt * k1z,
+            vz + 0.5 * dt * k1vz,
+            max(v_lat_sq + 0.5 * dt * k1vls, 0.0),
+            params,
+        )
+        k3z, k3vz, k3vls = _coast_derivatives(
+            z + 0.5 * dt * k2z,
+            vz + 0.5 * dt * k2vz,
+            max(v_lat_sq + 0.5 * dt * k2vls, 0.0),
+            params,
+        )
+        k4z, k4vz, k4vls = _coast_derivatives(
+            z + dt * k3z,
+            vz + dt * k3vz,
+            max(v_lat_sq + dt * k3vls, 0.0),
+            params,
+        )
+
+        z += (dt / 6.0) * (k1z + 2.0 * k2z + 2.0 * k3z + k4z)
+        vz += (dt / 6.0) * (k1vz + 2.0 * k2vz + 2.0 * k3vz + k4vz)
+        v_lat_sq = max(
+            v_lat_sq + (dt / 6.0) * (k1vls + 2.0 * k2vls + 2.0 * k3vls + k4vls),
+            0.0,
+        )
+        steps += 1
+
+    return z, steps * dt
+
+
+def propagate_coast_to_apogee(
+    z: float,
+    vz: float,
+    v_lat_sq: float,
+    params: ModelParams,
+    *,
+    solver: CoastSolver = "euler",
+    dt: float = 0.01,
+    max_steps: int = 100_000,
+) -> tuple[float, float]:
+    if solver == "rk4":
+        return propagate_coast_to_apogee_rk4(z, vz, v_lat_sq, params, dt=dt, max_steps=max_steps)
+    return propagate_coast_to_apogee_euler(z, vz, v_lat_sq, params, dt=dt, max_steps=max_steps)

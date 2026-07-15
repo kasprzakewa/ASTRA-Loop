@@ -91,13 +91,30 @@ class AstraApp(ctk.CTk):
 
         self._filter_var = tk.StringVar(value=self._default_key(self._filters, preferred="NoFilter"))
         self._predictor_var = tk.StringVar(value=self._default_key(self._predictors))
+        self._solver_var = tk.StringVar(value="euler")
         self._controller_var = tk.StringVar(value=self._default_key(self._controllers, preferred="NoController"))
 
         filter_options = sorted(self._filters.keys(), key=lambda name: (name != "NoFilter", name))
         controller_options = sorted(self._controllers.keys(), key=lambda name: (name != "NoController", name))
         self._add_selector(scroll, "Filter", self._filter_var, filter_options)
-        self._add_selector(scroll, "Predictor", self._predictor_var, list(self._predictors.keys()))
-        self._add_selector(scroll, "Controller", self._controller_var, controller_options)
+        self._add_selector(
+            scroll,
+            "Predictor",
+            self._predictor_var,
+            list(self._predictors.keys()),
+            command=self._on_predictor_changed,
+        )
+
+        self._solver_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._add_selector(self._solver_frame, "Coast Solver", self._solver_var, ["euler", "rk4"])
+
+        self._controller_label, _ = self._add_selector(
+            scroll,
+            "Controller",
+            self._controller_var,
+            controller_options,
+        )
+        self._update_solver_visibility()
 
         self._params_btn = ctk.CTkButton(
             scroll,
@@ -253,22 +270,43 @@ class AstraApp(ctk.CTk):
             text_color=ACCENT_PINK,
         ).pack()
 
-    def _add_selector(self, parent: ctk.CTkFrame, label: str, variable: tk.StringVar, options: list[str]) -> None:
-        ctk.CTkLabel(parent, text=label, anchor="w", text_color=TEXT_PRIMARY).pack(padx=16, pady=(8, 2), anchor="w")
-        menu = ctk.CTkOptionMenu(
-            parent,
-            variable=variable,
-            values=options or ["—"],
-            height=32,
-            corner_radius=WIDGET_CORNER_RADIUS,
-            fg_color=DROPDOWN_GRAY,
-            button_color=DROPDOWN_GRAY,
-            button_hover_color=DROPDOWN_HOVER,
-            dropdown_fg_color=DROPDOWN_GRAY,
-            dropdown_hover_color=DROPDOWN_HOVER,
-            text_color=TEXT_PRIMARY,
-        )
+    def _add_selector(
+        self,
+        parent: ctk.CTkFrame,
+        label: str,
+        variable: tk.StringVar,
+        options: list[str],
+        command: object | None = None,
+    ) -> tuple[ctk.CTkLabel, ctk.CTkOptionMenu]:
+        label_widget = ctk.CTkLabel(parent, text=label, anchor="w", text_color=TEXT_PRIMARY)
+        label_widget.pack(padx=16, pady=(8, 2), anchor="w")
+        menu_kwargs: dict[str, object] = {
+            "variable": variable,
+            "values": options or ["—"],
+            "height": 32,
+            "corner_radius": WIDGET_CORNER_RADIUS,
+            "fg_color": DROPDOWN_GRAY,
+            "button_color": DROPDOWN_GRAY,
+            "button_hover_color": DROPDOWN_HOVER,
+            "dropdown_fg_color": DROPDOWN_GRAY,
+            "dropdown_hover_color": DROPDOWN_HOVER,
+            "text_color": TEXT_PRIMARY,
+        }
+        if command is not None:
+            menu_kwargs["command"] = command
+        menu = ctk.CTkOptionMenu(parent, **menu_kwargs)  # type: ignore[arg-type]
         menu.pack(padx=16, pady=(0, 4), fill="x")
+        return label_widget, menu
+
+    def _on_predictor_changed(self, _value: str | None = None) -> None:
+        self._update_solver_visibility()
+
+    def _update_solver_visibility(self) -> None:
+        if self._predictor_var.get() == "ApogeePredict3D":
+            if not self._solver_frame.winfo_ismapped():
+                self._solver_frame.pack(fill="x", before=self._controller_label)
+        else:
+            self._solver_frame.pack_forget()
 
     @staticmethod
     def _darken(hex_color: str, factor: float = 0.82) -> str:
@@ -292,9 +330,12 @@ class AstraApp(ctk.CTk):
 
     def _create_predictor(self, predictor_cls: Type[Predictor]) -> Predictor:
         signature = inspect.signature(predictor_cls.__init__)
+        kwargs: dict[str, object] = {}
         if "params" in signature.parameters:
-            return predictor_cls(params=self._model_params)
-        return predictor_cls()
+            kwargs["params"] = self._model_params
+        if "solver" in signature.parameters:
+            kwargs["solver"] = self._solver_var.get()
+        return predictor_cls(**kwargs)  # type: ignore[arg-type]
 
     def _on_load_csv(self) -> None:
         path = filedialog.askopenfilename(

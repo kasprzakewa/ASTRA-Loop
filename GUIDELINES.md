@@ -1,10 +1,10 @@
-# ASTRA-L Architecture Guidelines
+# ASTRA-Loop Architecture Guidelines
 
-This document explains how ASTRA-L is structured and how to extend it with new algorithms.
+This document explains how ASTRA-Loop is structured and how to extend it with new algorithms.
 
 ## Overview
 
-ASTRA-L uses three core design principles:
+ASTRA-Loop uses three core design principles:
 
 1. **Strategy Pattern** — Filters, predictors, and controllers are interchangeable algorithms behind a common interface.
 2. **Dependency Injection** — The simulation engine receives algorithm instances at construction time; it does not import concrete implementations.
@@ -111,6 +111,17 @@ __all__ = [..., "MyPredictor"]
 |-----------|----------------|----------|
 | `ApogeePredict1D` | `static_pressure`, `total_pressure` | `position_z`, `velocity_z`, `predicted_apogee` |
 | `ApogeePredict3D` | `position_z`, `velocity_z`, and `velocity_lateral` **or** `velocity_x` + `velocity_y` | `predicted_apogee`, `time_to_apogee` |
+
+### Coast solvers (`ApogeePredict3D`)
+
+3D coast propagation integrates until `v_z <= 0`. Choose the integrator in the GUI (**Coast Solver**, visible only when `ApogeePredict3D` is selected):
+
+| Solver | Method | Notes |
+|--------|--------|-------|
+| `euler` | Forward Euler | Default; cheaper per step |
+| `rk4` | Classical 4th-order Runge–Kutta | More accurate for the same `dt` |
+
+Both share the same coast dynamics in `core/physics_utils.py` (`_coast_derivatives`). The selection is ignored by `ApogeePredict1D` (analytic formula).
 
 Example files:
 
