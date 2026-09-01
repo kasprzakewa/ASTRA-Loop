@@ -23,6 +23,7 @@ python main.py
 3. Choose a **Filter**, **Predictor**, and **Controller** from the dropdown menus.
 4. For `ApogeePredict3D`, optionally choose a **Coast Solver** (`euler` or `rk4`).
 5. Click **Run Simulation** to execute the SITL loop and view plots with performance metrics.
+6. For PD calibration, use **Calibrate…** with [`data/calibration/scenarios.yaml`](data/calibration/scenarios.yaml) (see [data/calibration/README.md](data/calibration/README.md)).
 
 See [GUIDELINES.md](GUIDELINES.md) for architecture details and instructions on adding new algorithms.
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import tkinter as tk
+from dataclasses import asdict
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from typing import Type
@@ -9,16 +10,21 @@ from typing import Type
 import customtkinter as ctk
 
 from core.controllers.base import Controller
+from core.controllers.pd_controller import PDController, PDControllerParams
 from core.data_loader import DataLoader
 from core.evaluator import EvaluationMetrics, Evaluator
 from core.filters.base import Filter
 from core.flight_schema import collect_validation_errors
+from core.mcu_flight_log import first_brake_open, load_flash_dump, records_to_simulation_result
 from core.physics_utils import ModelParams
 from core.predictors.base import Predictor
 from core.registry import discover_plugins
 from core.simulation_engine import SimulationEngine, SimulationResult
 from gui.error_dialog import ErrorDialog
+from gui.calibrate_dialog import open_calibrate_dialog
+from gui.coast_sil_dialog import CoastSilParams, CoastSilParamsDialog
 from gui.params_dialog import ModelParamsDialog
+from gui.pd_params_dialog import PDParamsDialog
 from gui.theme import (
     ACCENT_ORANGE,
     ACCENT_PINK,
@@ -53,8 +59,13 @@ class AstraApp(ctk.CTk):
         self._evaluator = Evaluator()
         self._visualizer = Visualizer()
         self._model_params = ModelParams()
+        self._pd_params = PDControllerParams()
+        self._coast_sil_params = CoastSilParams()
         self._last_result: SimulationResult | None = None
         self._logo_image: ctk.CTkImage | None = None
+        self._predictor_settings_btn: ctk.CTkButton | None = None
+        self._controller_settings_btn: ctk.CTkButton | None = None
+        self._controller_block: ctk.CTkFrame | None = None
 
         self._filters = discover_plugins("core.filters", Filter)
         self._predictors = discover_plugins("core.predictors", Predictor)
@@ -97,24 +108,30 @@ class AstraApp(ctk.CTk):
         filter_options = sorted(self._filters.keys(), key=lambda name: (name != "NoFilter", name))
         controller_options = sorted(self._controllers.keys(), key=lambda name: (name != "NoController", name))
         self._add_selector(scroll, "Filter", self._filter_var, filter_options)
-        self._add_selector(
+        _, _, self._predictor_settings_btn, _ = self._add_selector(
             scroll,
             "Predictor",
             self._predictor_var,
             list(self._predictors.keys()),
             command=self._on_predictor_changed,
+            settings_command=self._open_coast_sil_dialog,
         )
 
         self._solver_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         self._add_selector(self._solver_frame, "Coast Solver", self._solver_var, ["euler", "rk4"])
 
-        self._controller_label, _ = self._add_selector(
-            scroll,
+        self._controller_block = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._controller_block.pack(fill="x")
+        _, _, self._controller_settings_btn, _ = self._add_selector(
+            self._controller_block,
             "Controller",
             self._controller_var,
             controller_options,
+            command=self._on_controller_changed,
+            settings_command=self._open_pd_params_dialog,
         )
         self._update_solver_visibility()
+        self._update_settings_icons()
 
         self._params_btn = ctk.CTkButton(
             scroll,
@@ -127,6 +144,18 @@ class AstraApp(ctk.CTk):
             text_color=TEXT_PRIMARY,
         )
         self._params_btn.pack(padx=16, pady=(8, 4), fill="x")
+
+        self._calibrate_btn = ctk.CTkButton(
+            scroll,
+            text="Calibrate…",
+            command=self._open_calibrate_dialog,
+            fg_color=SURFACE_GRAY,
+            hover_color=DROPDOWN_HOVER,
+            border_width=1,
+            border_color=GRID_COLOR,
+            text_color=TEXT_PRIMARY,
+        )
+        self._calibrate_btn.pack(padx=16, pady=(4, 4), fill="x")
 
         self._show_from_burnout_var = tk.BooleanVar(value=False)
         self._show_from_burnout_cb = ctk.CTkCheckBox(
@@ -199,7 +228,19 @@ class AstraApp(ctk.CTk):
             height=32,
             corner_radius=WIDGET_CORNER_RADIUS,
         )
-        self._load_btn.pack(padx=12, pady=(0, 12), fill="x")
+        self._load_btn.pack(padx=12, pady=(0, 6), fill="x")
+
+        self._load_mcu_btn = ctk.CTkButton(
+            box,
+            text="Load MCU Log…",
+            command=self._on_load_mcu_log,
+            fg_color=DROPDOWN_GRAY,
+            hover_color=DROPDOWN_HOVER,
+            text_color=TEXT_PRIMARY,
+            height=32,
+            corner_radius=WIDGET_CORNER_RADIUS,
+        )
+        self._load_mcu_btn.pack(padx=12, pady=(0, 12), fill="x")
 
     def _build_metrics_box(self, parent: ctk.CTkFrame) -> None:
         box = ctk.CTkFrame(parent, fg_color=SURFACE_GRAY, corner_radius=8, border_width=1, border_color=GRID_COLOR)
@@ -220,7 +261,7 @@ class AstraApp(ctk.CTk):
             text_color=TEXT_MUTED,
             wrap="word",
             activate_scrollbars=True,
-            height=140,
+            height=160,
         )
         self._metrics_text.pack(padx=12, pady=(0, 12), fill="x")
         self._set_metrics_text("Run a simulation to see metrics.")
@@ -243,7 +284,7 @@ class AstraApp(ctk.CTk):
         )
         self._tabview.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
-        for tab_name in ("Altitude", "Apogee", "Control"):
+        for tab_name in ("Altitude", "Apogee", "Control", "Servo"):
             tab = self._tabview.add(tab_name)
             tab.configure(fg_color=BG_DARK)
             self._visualizer.attach_tab(tab, tab_name)
@@ -277,9 +318,14 @@ class AstraApp(ctk.CTk):
         variable: tk.StringVar,
         options: list[str],
         command: object | None = None,
-    ) -> tuple[ctk.CTkLabel, ctk.CTkOptionMenu]:
+        settings_command: object | None = None,
+    ) -> tuple[ctk.CTkLabel, ctk.CTkOptionMenu, ctk.CTkButton | None, ctk.CTkFrame]:
         label_widget = ctk.CTkLabel(parent, text=label, anchor="w", text_color=TEXT_PRIMARY)
         label_widget.pack(padx=16, pady=(8, 2), anchor="w")
+
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(padx=16, pady=(0, 4), fill="x")
+
         menu_kwargs: dict[str, object] = {
             "variable": variable,
             "values": options or ["—"],
@@ -294,19 +340,69 @@ class AstraApp(ctk.CTk):
         }
         if command is not None:
             menu_kwargs["command"] = command
-        menu = ctk.CTkOptionMenu(parent, **menu_kwargs)  # type: ignore[arg-type]
-        menu.pack(padx=16, pady=(0, 4), fill="x")
-        return label_widget, menu
+        menu = ctk.CTkOptionMenu(row, **menu_kwargs)  # type: ignore[arg-type]
+        menu.pack(side="left", fill="x", expand=True)
+
+        settings_btn: ctk.CTkButton | None = None
+        if settings_command is not None:
+            settings_btn = ctk.CTkButton(
+                row,
+                text="⚙",
+                width=32,
+                height=32,
+                command=settings_command,  # type: ignore[arg-type]
+                fg_color=SURFACE_GRAY,
+                hover_color=DROPDOWN_HOVER,
+                border_width=1,
+                border_color=GRID_COLOR,
+                text_color=TEXT_PRIMARY,
+                corner_radius=WIDGET_CORNER_RADIUS,
+            )
+            settings_btn.pack(side="right", padx=(6, 0))
+            settings_btn.pack_forget()
+
+        return label_widget, menu, settings_btn, row
 
     def _on_predictor_changed(self, _value: str | None = None) -> None:
         self._update_solver_visibility()
+        self._update_settings_icons()
+
+    def _on_controller_changed(self, _value: str | None = None) -> None:
+        self._update_settings_icons()
+
+    def _selected_predictor_cls(self) -> Type[Predictor] | None:
+        return self._predictors.get(self._predictor_var.get())
+
+    def _predictor_supports_closed_loop(self) -> bool:
+        predictor_cls = self._selected_predictor_cls()
+        return bool(
+            predictor_cls is not None
+            and getattr(predictor_cls, "supports_closed_loop_coast", False)
+        )
 
     def _update_solver_visibility(self) -> None:
-        if self._predictor_var.get() == "ApogeePredict3D":
+        if self._controller_block is None:
+            return
+        if self._predictor_supports_closed_loop():
             if not self._solver_frame.winfo_ismapped():
-                self._solver_frame.pack(fill="x", before=self._controller_label)
+                self._solver_frame.pack(fill="x", before=self._controller_block)
         else:
             self._solver_frame.pack_forget()
+
+    def _update_settings_icons(self) -> None:
+        if self._predictor_settings_btn is not None:
+            if self._predictor_supports_closed_loop():
+                if not self._predictor_settings_btn.winfo_ismapped():
+                    self._predictor_settings_btn.pack(side="right", padx=(6, 0))
+            else:
+                self._predictor_settings_btn.pack_forget()
+
+        if self._controller_settings_btn is not None:
+            if self._controller_var.get() == "PDController":
+                if not self._controller_settings_btn.winfo_ismapped():
+                    self._controller_settings_btn.pack(side="right", padx=(6, 0))
+            else:
+                self._controller_settings_btn.pack_forget()
 
     @staticmethod
     def _darken(hex_color: str, factor: float = 0.82) -> str:
@@ -328,6 +424,31 @@ class AstraApp(ctk.CTk):
     def _on_params_saved(self, params: ModelParams) -> None:
         self._model_params = params
 
+    def _open_pd_params_dialog(self) -> None:
+        PDParamsDialog(self, self._pd_params, on_save=self._on_pd_params_saved)
+
+    def _on_pd_params_saved(self, params: PDControllerParams) -> None:
+        self._pd_params = params
+
+    def _open_coast_sil_dialog(self) -> None:
+        CoastSilParamsDialog(self, self._coast_sil_params, on_save=self._on_coast_sil_saved)
+
+    def _on_coast_sil_saved(self, params: CoastSilParams) -> None:
+        self._coast_sil_params = params
+
+    def _open_calibrate_dialog(self) -> None:
+        open_calibrate_dialog(
+            self,
+            model_params=self._model_params,
+            pd_params=self._pd_params,
+            on_load_csv=self._load_csv_path,
+            on_pd_apply=self._on_pd_params_saved,
+        )
+
+    def _load_csv_path(self, path: Path) -> None:
+        self._data_loader.load_csv(path)
+        self._file_label.configure(text=path.name, text_color=TEXT_PRIMARY)
+
     def _create_predictor(self, predictor_cls: Type[Predictor]) -> Predictor:
         signature = inspect.signature(predictor_cls.__init__)
         kwargs: dict[str, object] = {}
@@ -336,6 +457,11 @@ class AstraApp(ctk.CTk):
         if "solver" in signature.parameters:
             kwargs["solver"] = self._solver_var.get()
         return predictor_cls(**kwargs)  # type: ignore[arg-type]
+
+    def _create_controller(self, controller_cls: Type[Controller]) -> Controller:
+        if issubclass(controller_cls, PDController):
+            return controller_cls(**asdict(self._pd_params))
+        return controller_cls()
 
     def _on_load_csv(self) -> None:
         path = filedialog.askopenfilename(
@@ -346,10 +472,44 @@ class AstraApp(ctk.CTk):
             return
 
         try:
-            self._data_loader.load_csv(path)
-            self._file_label.configure(text=Path(path).name, text_color=TEXT_PRIMARY)
+            self._load_csv_path(Path(path))
         except Exception as exc:
             messagebox.showerror("Load Error", f"Failed to load CSV:\n{exc}")
+
+    def _on_load_mcu_log(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select MCU flash dump",
+            filetypes=[("Flash dump", "*.bin"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            records = load_flash_dump(path)
+            result = records_to_simulation_result(records)
+            self._last_result = result
+            self._file_label.configure(text=Path(path).name, text_color=TEXT_PRIMARY)
+            self._refresh_plots()
+            hit = first_brake_open(records)
+            if hit is None:
+                brake_line = "First brake: never (u=0)"
+            else:
+                brake_line = (
+                    f"First brake: t={hit.time_s:.2f}s, "
+                    f"vz={hit.velocity_z:.1f} m/s, u={hit.control_u:.3f}"
+                )
+            self._set_metrics_text(
+                (
+                    f"MCU log loaded.\nSamples: {len(result.time)}\n"
+                    f"Duration: {result.time[-1] - result.time[0]:.2f} s\n"
+                    f"{brake_line}"
+                )
+                if result.time
+                else "MCU log loaded (empty).",
+                highlight=True,
+            )
+        except Exception as exc:
+            messagebox.showerror("Load Error", f"Failed to load MCU log:\n{exc}")
 
     def _on_run_simulation(self) -> None:
         if not self._data_loader.is_loaded:
@@ -380,20 +540,31 @@ class AstraApp(ctk.CTk):
             return
 
         try:
+            controller = self._create_controller(controller_cls)
+            sil = self._coast_sil_params
             engine = SimulationEngine(
                 data_loader=self._data_loader,
                 filter_algo=filter_cls(),
                 predictor=self._create_predictor(predictor_cls),
-                controller=controller_cls(),
+                controller=controller,
+                wind_speed=sil.wind_speed,
+                gust_strength=sil.gust_strength,
+                plant_mass_scale=sil.plant_mass_scale,
+                plant_cd_scale=sil.plant_cd_scale,
             )
             result = engine.run()
             self._last_result = result
 
             self._refresh_plots()
+            target_apogee = (
+                self._pd_params.target_apogee if issubclass(controller_cls, PDController) else None
+            )
             metrics = self._evaluator.evaluate(
                 result,
                 predictor_cls=predictor_cls,
                 controller_cls=controller_cls,
+                target_apogee=target_apogee,
+                reference_apogee=self._data_loader.reference_apogee(),
             )
             self._update_metrics(metrics)
 
@@ -434,6 +605,8 @@ class AstraApp(ctk.CTk):
         text = (
             f"Altitude RMSE: {self._format_metric(metrics.altitude_rmse, metrics.altitude_rmse_na_reason, unit='m')}\n"
             f"Apogee Error: {self._format_metric(metrics.apogee_error, metrics.apogee_error_na_reason, unit='m')}\n"
+            f"Target Error: {self._format_metric(metrics.target_error, metrics.target_error_na_reason, unit='m')}\n"
+            f"OR Apogee Error: {self._format_metric(metrics.reference_apogee_error, metrics.reference_apogee_error_na_reason, unit='m')}\n"
             f"Max Overshoot: {self._format_metric(metrics.max_overshoot, metrics.max_overshoot_na_reason, unit='')}\n"
             f"Mean Exec Time: {metrics.mean_execution_time_ms:.3f} ms\n"
             f"Max Exec Time: {metrics.max_execution_time_ms:.3f} ms"

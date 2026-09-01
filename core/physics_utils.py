@@ -6,6 +6,11 @@ from typing import Literal
 
 CoastSolver = Literal["euler", "rk4"]
 
+SERVO_ANGLE_SAFE_DEG = 90.0
+SERVO_ANGLE_OPEN_DEG = 30.0
+BODY_DIAMETER_M = 0.126
+BODY_CROSS_SECTION_M2 = math.pi * (BODY_DIAMETER_M / 2.0) ** 2  # sync firmware/astra/physics.h
+
 
 @dataclass(frozen=True)
 class ModelParams:
@@ -16,10 +21,28 @@ class ModelParams:
     baro_exponent: float = 0.1903
     density_exponent: float = 4.256
     g: float = 9.80665
-    default_cross_section: float = 0.01
-    default_mass: float = 15.0
-    default_drag_coefficient: float = 0.45
+    default_cross_section: float = BODY_CROSS_SECTION_M2
+    default_mass: float = 12.57
+    default_drag_coefficient: float = 0.42
+    brake_drag_coefficient: float = 1.2
     temperature_gradient: float = -0.0065
+
+
+def servo_angle_safe_deg() -> float:
+    return SERVO_ANGLE_SAFE_DEG
+
+
+def control_to_servo_angle(u: float) -> float:
+    try:
+        value = float(u)
+    except (TypeError, ValueError):
+        return servo_angle_safe_deg()
+    if value != value:
+        return servo_angle_safe_deg()
+    u_clamped = max(0.0, min(1.0, value))
+    return SERVO_ANGLE_SAFE_DEG + u_clamped * (
+        SERVO_ANGLE_OPEN_DEG - SERVO_ANGLE_SAFE_DEG
+    )
 
 
 def calculate_altitude(pressure: float, params: ModelParams) -> float:
@@ -56,35 +79,103 @@ def calculate_mach(speed: float, altitude: float, params: ModelParams) -> float:
     local_sound_speed = 20.05 * math.sqrt(temp)
     return speed / local_sound_speed
 
+
 def calculate_drag_coefficient(speed: float, altitude: float, params: ModelParams) -> float:
     mach = calculate_mach(speed, altitude, params)
     if mach <= 0.0:
         return 0.0
-    return params.default_drag_coefficient/math.sqrt(1.0 - mach**2)
+    mach_sq = min(mach * mach, 0.99)
+    return params.default_drag_coefficient / math.sqrt(1.0 - mach_sq)
+
+
+def calculate_brake_area(servo_angle: float) -> float:
+    brake_cross_section_mm2 = 0.1512 * servo_angle**2 - 124.74 * servo_angle + 9996.8
+    return max(brake_cross_section_mm2, 0.0) * 1e-6
+
+
+def calculate_cross_section(params: ModelParams, servo_angle: float) -> float:
+    return params.default_cross_section + calculate_brake_area(servo_angle)
 
 
 def _coast_derivatives(
     z: float,
     vz: float,
-    v_lat_sq: float,
+    v_h: float,
     params: ModelParams,
+    servo_angle: float = 0.0,
+    wind_speed: float = 0.0,
+    wind_vertical: float = 0.0,
 ) -> tuple[float, float, float]:
-    """Return (dz/dt, dvz/dt, d(v_lat_sq)/dt) for coast phase with quadratic drag."""
-    speed = math.sqrt(max(v_lat_sq, 0.0) + vz * vz)
-    drag_coefficient = calculate_drag_coefficient(speed, z, params)
+    """Return (dz/dt, dvz/dt, dv_h/dt) for coast with air-relative quadratic drag."""
+    v_rel_h = v_h - wind_speed
+    v_rel_z = vz - wind_vertical
+    speed_air = math.sqrt(v_rel_z * v_rel_z + v_rel_h * v_rel_h)
+    cd_body = calculate_drag_coefficient(speed_air, z, params)
     rho = calculate_air_density(z, params)
-    k = (
-        -0.5
-        / params.default_mass
-        * rho
-        * drag_coefficient
-        * params.default_cross_section
-        * speed
-    )
+    a_brake = calculate_brake_area(servo_angle)
+    cda = cd_body * params.default_cross_section + params.brake_drag_coefficient * a_brake
+    k = -0.5 / params.default_mass * rho * cda * speed_air
     dz_dt = vz
-    dvz_dt = -params.g + k * vz
-    dv_lat_sq_dt = 2.0 * k * v_lat_sq
-    return dz_dt, dvz_dt, dv_lat_sq_dt
+    dvz_dt = -params.g + k * v_rel_z
+    dv_h_dt = k * v_rel_h
+    return dz_dt, dvz_dt, dv_h_dt
+
+
+def step_coast(
+    z: float,
+    vz: float,
+    v_h: float,
+    params: ModelParams,
+    dt: float,
+    servo_angle: float = 0.0,
+    solver: CoastSolver = "euler",
+    wind_speed: float = 0.0,
+    wind_vertical: float = 0.0,
+) -> tuple[float, float, float]:
+    """Advance coast dynamics by one integration step. Returns (z, vz, v_h)."""
+    if solver == "rk4":
+        k1z, k1vz, k1vh = _coast_derivatives(
+            z, vz, v_h, params, servo_angle, wind_speed, wind_vertical
+        )
+        k2z, k2vz, k2vh = _coast_derivatives(
+            z + 0.5 * dt * k1z,
+            vz + 0.5 * dt * k1vz,
+            v_h + 0.5 * dt * k1vh,
+            params,
+            servo_angle,
+            wind_speed,
+            wind_vertical,
+        )
+        k3z, k3vz, k3vh = _coast_derivatives(
+            z + 0.5 * dt * k2z,
+            vz + 0.5 * dt * k2vz,
+            v_h + 0.5 * dt * k2vh,
+            params,
+            servo_angle,
+            wind_speed,
+            wind_vertical,
+        )
+        k4z, k4vz, k4vh = _coast_derivatives(
+            z + dt * k3z,
+            vz + dt * k3vz,
+            v_h + dt * k3vh,
+            params,
+            servo_angle,
+            wind_speed,
+            wind_vertical,
+        )
+        z += (dt / 6.0) * (k1z + 2.0 * k2z + 2.0 * k3z + k4z)
+        vz += (dt / 6.0) * (k1vz + 2.0 * k2vz + 2.0 * k3vz + k4vz)
+        v_h += (dt / 6.0) * (k1vh + 2.0 * k2vh + 2.0 * k3vh + k4vh)
+        return z, vz, v_h
+
+    dz_dt, dvz_dt, dv_h_dt = _coast_derivatives(
+        z, vz, v_h, params, servo_angle, wind_speed, wind_vertical
+    )
+    z += dz_dt * dt
+    vz += dvz_dt * dt
+    v_h += dv_h_dt * dt
+    return z, vz, v_h
 
 
 def propagate_coast_to_apogee_euler(
@@ -94,17 +185,16 @@ def propagate_coast_to_apogee_euler(
     params: ModelParams,
     dt: float = 0.01,
     max_steps: int = 100_000,
+    servo_angle: float = 0.0,
 ) -> tuple[float, float]:
     """Integrate coast-phase motion with forward Euler until v_z <= 0."""
     if vz <= 0.0:
         return z, 0.0
 
+    v_h = math.sqrt(max(v_lat_sq, 0.0))
     steps = 0
     while vz > 0.0 and steps < max_steps:
-        dz_dt, dvz_dt, dv_lat_sq_dt = _coast_derivatives(z, vz, v_lat_sq, params)
-        z += dz_dt * dt
-        vz += dvz_dt * dt
-        v_lat_sq = max(v_lat_sq + dv_lat_sq_dt * dt, 0.0)
+        z, vz, v_h = step_coast(z, vz, v_h, params, dt, servo_angle, "euler")
         steps += 1
 
     return z, steps * dt
@@ -117,39 +207,16 @@ def propagate_coast_to_apogee_rk4(
     params: ModelParams,
     dt: float = 0.01,
     max_steps: int = 100_000,
+    servo_angle: float = 0.0,
 ) -> tuple[float, float]:
     """Integrate coast-phase motion with classic RK4 until v_z <= 0."""
     if vz <= 0.0:
         return z, 0.0
 
+    v_h = math.sqrt(max(v_lat_sq, 0.0))
     steps = 0
     while vz > 0.0 and steps < max_steps:
-        k1z, k1vz, k1vls = _coast_derivatives(z, vz, v_lat_sq, params)
-        k2z, k2vz, k2vls = _coast_derivatives(
-            z + 0.5 * dt * k1z,
-            vz + 0.5 * dt * k1vz,
-            max(v_lat_sq + 0.5 * dt * k1vls, 0.0),
-            params,
-        )
-        k3z, k3vz, k3vls = _coast_derivatives(
-            z + 0.5 * dt * k2z,
-            vz + 0.5 * dt * k2vz,
-            max(v_lat_sq + 0.5 * dt * k2vls, 0.0),
-            params,
-        )
-        k4z, k4vz, k4vls = _coast_derivatives(
-            z + dt * k3z,
-            vz + dt * k3vz,
-            max(v_lat_sq + dt * k3vls, 0.0),
-            params,
-        )
-
-        z += (dt / 6.0) * (k1z + 2.0 * k2z + 2.0 * k3z + k4z)
-        vz += (dt / 6.0) * (k1vz + 2.0 * k2vz + 2.0 * k3vz + k4vz)
-        v_lat_sq = max(
-            v_lat_sq + (dt / 6.0) * (k1vls + 2.0 * k2vls + 2.0 * k3vls + k4vls),
-            0.0,
-        )
+        z, vz, v_h = step_coast(z, vz, v_h, params, dt, servo_angle, "rk4")
         steps += 1
 
     return z, steps * dt
@@ -164,7 +231,12 @@ def propagate_coast_to_apogee(
     solver: CoastSolver = "euler",
     dt: float = 0.01,
     max_steps: int = 100_000,
+    servo_angle: float = 0.0,
 ) -> tuple[float, float]:
     if solver == "rk4":
-        return propagate_coast_to_apogee_rk4(z, vz, v_lat_sq, params, dt=dt, max_steps=max_steps)
-    return propagate_coast_to_apogee_euler(z, vz, v_lat_sq, params, dt=dt, max_steps=max_steps)
+        return propagate_coast_to_apogee_rk4(
+            z, vz, v_lat_sq, params, dt=dt, max_steps=max_steps, servo_angle=servo_angle
+        )
+    return propagate_coast_to_apogee_euler(
+        z, vz, v_lat_sq, params, dt=dt, max_steps=max_steps, servo_angle=servo_angle
+    )

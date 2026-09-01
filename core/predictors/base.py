@@ -5,6 +5,7 @@ from typing import Any
 class Predictor(ABC):
     required_columns: tuple[str, ...] = ()
     produced_fields: tuple[str, ...] = ("predicted_apogee",)
+    supports_closed_loop_coast: bool = False
 
     @classmethod
     def validate_columns(cls, available: set[str]) -> list[str]:

@@ -45,6 +45,7 @@ class Visualizer:
         self._plot_altitude(plot_data)
         self._plot_apogee(plot_data)
         self._plot_control(plot_data)
+        self._plot_servo(plot_data)
 
         for canvas in self._canvases.values():
             canvas.draw_idle()
@@ -117,6 +118,42 @@ class Visualizer:
         self._style_axes(ax, "Control Signal vs Time", "Time [s]", "Signal [0-1]")
         self._autoscale(ax)
         ax.set_ylim(-0.05, 1.05)
+        figure.tight_layout()
+
+    def _plot_servo(self, result: SimulationResult) -> None:
+        figure = self._figures.get("Servo")
+        if figure is None:
+            return
+
+        if not self._has_valid_data(result.logged_servo_angle):
+            figure.clear()
+            ax = figure.add_subplot(111)
+            self._style_axes(ax, "Servo Angle vs Time", "Time [s]", "Angle [deg]")
+            ax.text(
+                0.5,
+                0.5,
+                "No servo angle data\n(load MCU log)",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                color=TEXT_MUTED,
+            )
+            figure.tight_layout()
+            return
+
+        figure.clear()
+        ax = figure.add_subplot(111)
+        time = np.array(result.time)
+
+        self._line(
+            ax,
+            time,
+            result.logged_servo_angle,
+            ACCENT_ORANGE,
+            label="Servo angle",
+        )
+        self._style_axes(ax, "Servo Angle vs Time", "Time [s]", "Angle [deg]")
+        self._autoscale(ax)
         figure.tight_layout()
 
     def _line(

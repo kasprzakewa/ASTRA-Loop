@@ -21,8 +21,12 @@ class EvaluationMetrics:
     altitude_rmse_na_reason: str | None
     apogee_error: float | None
     apogee_error_na_reason: str | None
+    target_error: float | None
+    target_error_na_reason: str | None
     max_overshoot: float | None
     max_overshoot_na_reason: str | None
+    reference_apogee_error: float | None
+    reference_apogee_error_na_reason: str | None
     mean_execution_time_ms: float
     max_execution_time_ms: float
 
@@ -34,6 +38,8 @@ class Evaluator:
         *,
         predictor_cls: Type[Predictor],
         controller_cls: Type[Controller],
+        target_apogee: float | None = None,
+        reference_apogee: float | None = None,
     ) -> EvaluationMetrics:
         has_reference = self._has_reference_altitude(result.logged_true_altitude)
         predictor_estimates_altitude = "position_z" in predictor_cls.produced_fields
@@ -60,12 +66,29 @@ class Evaluator:
                 coast.logged_true_altitude,
             )
 
+        target_error: float | None = None
+        target_error_na_reason: str | None = None
+        if target_apogee is None:
+            target_error_na_reason = "no target_apogee"
+        else:
+            target_error = self._target_error(result.logged_true_altitude, target_apogee)
+
         max_overshoot: float | None = None
         max_overshoot_na_reason: str | None = None
         if issubclass(controller_cls, NoController):
             max_overshoot_na_reason = "NoController"
         else:
             max_overshoot = self._max_overshoot(result.logged_control_signal)
+
+        reference_apogee_error: float | None = None
+        reference_apogee_error_na_reason: str | None = None
+        if reference_apogee is None:
+            reference_apogee_error_na_reason = "no reference_apogee"
+        else:
+            reference_apogee_error = self._reference_apogee_error(
+                result.logged_altitude,
+                reference_apogee,
+            )
 
         mean_exec, max_exec = self._execution_time_stats(result.execution_times_ms)
 
@@ -74,8 +97,12 @@ class Evaluator:
             altitude_rmse_na_reason=altitude_rmse_na_reason,
             apogee_error=apogee_error,
             apogee_error_na_reason=apogee_error_na_reason,
+            target_error=target_error,
+            target_error_na_reason=target_error_na_reason,
             max_overshoot=max_overshoot,
             max_overshoot_na_reason=max_overshoot_na_reason,
+            reference_apogee_error=reference_apogee_error,
+            reference_apogee_error_na_reason=reference_apogee_error_na_reason,
             mean_execution_time_ms=mean_exec,
             max_execution_time_ms=max_exec,
         )
@@ -101,6 +128,24 @@ class Evaluator:
             return float("nan")
         reference_apogee = float(np.max(valid_alt))
         return float(abs(np.nanmax(valid_pred) - reference_apogee))
+
+    def _target_error(self, altitudes: list[float], target_apogee: float) -> float:
+        alt = np.array(altitudes, dtype=float)
+        valid_alt = alt[~np.isnan(alt)]
+        if valid_alt.size == 0:
+            return float("nan")
+        return float(abs(float(np.max(valid_alt)) - target_apogee))
+
+    def _reference_apogee_error(
+        self,
+        altitudes: list[float],
+        reference_apogee: float,
+    ) -> float:
+        alt = np.array(altitudes, dtype=float)
+        valid_alt = alt[~np.isnan(alt)]
+        if valid_alt.size == 0:
+            return float("nan")
+        return float(abs(float(np.max(valid_alt)) - reference_apogee))
 
     def _max_overshoot(self, control_signal: list[float]) -> float:
         signal = np.array(control_signal, dtype=float)

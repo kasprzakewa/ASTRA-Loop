@@ -4,13 +4,19 @@ import math
 from typing import Any
 
 from core.flight_schema import get_field, lateral_velocity_sq
-from core.physics_utils import CoastSolver, ModelParams, propagate_coast_to_apogee
+from core.physics_utils import (
+    CoastSolver,
+    ModelParams,
+    control_to_servo_angle,
+    propagate_coast_to_apogee,
+)
 from core.predictors.base import Predictor
 
 
 class ApogeePredict3D(Predictor):
     required_columns = ("position_z", "velocity_z")
     produced_fields = ("predicted_apogee", "time_to_apogee")
+    supports_closed_loop_coast = True
 
     def __init__(
         self,
@@ -21,6 +27,9 @@ class ApogeePredict3D(Predictor):
         self._params = params or ModelParams()
         self._dt = dt
         self._solver = solver
+
+    def coast_config(self) -> tuple[ModelParams, float, CoastSolver]:
+        return self._params, self._dt, self._solver
 
     def reset(self) -> None:
         pass
@@ -41,6 +50,7 @@ class ApogeePredict3D(Predictor):
         position_z = get_field(state, "position_z")
         velocity_z = get_field(state, "velocity_z")
         v_lat_sq = lateral_velocity_sq(state)
+        servo_angle = control_to_servo_angle(state.get("control_signal", 0.0))
 
         if math.isnan(position_z) or math.isnan(velocity_z):
             predicted_apogee = float("nan")
@@ -56,6 +66,7 @@ class ApogeePredict3D(Predictor):
                 self._params,
                 solver=self._solver,
                 dt=self._dt,
+                servo_angle=servo_angle,
             )
 
         return {

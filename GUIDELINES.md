@@ -105,12 +105,23 @@ __all__ = [..., "MyPredictor"]
 - `reset()` — Clear internal state (e.g. PID integrator).
 - `compute(state: dict, setpoint: float) -> float` — Return control signal in `[0, 1]`.
 
+### Built-in Controllers
+
+| Controller | Params (GUI) | Behaviour |
+|------------|--------------|-----------|
+| `NoController` | — | Always returns `0.0` (brakes closed) |
+| `PDController` | `target_apogee`, `kp`, `kd` | `e = predicted_apogee − target`, `de = (e − e_prev)/dt`, `u = clamp(Kp·e + Kd·de, 0, 1)` |
+
+Control `u ∈ [0, 1]` maps to physical servo angle via `control_to_servo_angle(u) = 90° − 60°·u` (safe at 90°, max brake at 30°) in `physics_utils`. Brake area uses `S(α) = 0.1512α² − 124.74α + 9996.8` mm² and `calculate_cross_section(params, servo_angle)`. On MCU, `Servo_SetAngleDeg` maps α ∈ [30°, 90°] to PWM (`SERVO_PWM_MIN` @ 30°, `SERVO_PWM_MAX` @ 90°).
+
 ## Built-in Predictors
 
 | Predictor | Reads from CSV | Computes |
 |-----------|----------------|----------|
 | `ApogeePredict1D` | `static_pressure`, `total_pressure` | `position_z`, `velocity_z`, `predicted_apogee` |
 | `ApogeePredict3D` | `position_z`, `velocity_z`, and `velocity_lateral` **or** `velocity_x` + `velocity_y` | `predicted_apogee`, `time_to_apogee` |
+
+`ApogeePredict3D` sets `supports_closed_loop_coast = True` and reads optional `control_signal` from state when predicting coast drag.
 
 ### Coast solvers (`ApogeePredict3D`)
 
@@ -121,7 +132,7 @@ __all__ = [..., "MyPredictor"]
 | `euler` | Forward Euler | Default; cheaper per step |
 | `rk4` | Classical 4th-order Runge–Kutta | More accurate for the same `dt` |
 
-Both share the same coast dynamics in `core/physics_utils.py` (`_coast_derivatives`). The selection is ignored by `ApogeePredict1D` (analytic formula).
+Both share the same coast dynamics in `core/physics_utils.py` (`_coast_derivatives` / `step_coast`). The selection is ignored by `ApogeePredict1D` (analytic formula).
 
 Example files:
 
@@ -149,20 +160,35 @@ For `apogee_1d` and `apogee_1d_eval`, total pressure is computed from static pre
 
 ## Simulation Loop
 
-For each CSV row the engine executes:
+For each step the engine executes:
 
 ```
 raw measurement → Filter → Predictor → Controller → log
 ```
 
-The merged filtered + predicted state is passed to the controller. Execution time per step is recorded for performance evaluation.
+The merged filtered + predicted state is passed to the controller. Prediction for control uses `control_signal=0.0` (open-brake coast forecast). Execution time per step is recorded for performance evaluation.
 
-Logging rules:
+### Closed-loop coast (`PDController` + `ApogeePredict3D`)
+
+After burnout is detected:
+
+1. CSV rows are replayed only up to burnout.
+2. From that state the plant is integrated with `step_coast` using the commanded servo angle.
+3. Logged altitude / velocity come from the **simulated** plant, not post-burnout CSV rows.
+
+**Coast SIL parameters** (GUI gear next to a predictor with `supports_closed_loop_coast`): **Wind speed**, **Gust strength (vertical)**, **Plant mass scale**, **Plant Cd scale**. These disturb only the plant coast step; the predictor keeps ideal Model Parameters and zero wind. Active in closed-loop runs (`PDController` + closed-loop predictor).
+
+**PD parameters** (GUI gear next to `PDController`): `target_apogee`, `kp`, `kd`.
+
+With `NoController` the full CSV is replayed open-loop (no plant).
+
+Logging rules (open-loop / boost):
 
 - **True altitude** — `position_z` from the CSV row
 - **Computed altitude** — `position_z` from predictor output (1D computes it; 3D keeps CSV value)
 - **Velocity** — `velocity_z` from predictor output, falling back to CSV
-- **Apogee reference** — `max(position_z)` over the flight log
+
+During closed-loop coast, true and computed altitude are both the plant height.
 
 ## Data Loader
 
@@ -175,7 +201,9 @@ After simulation, `Evaluator` computes metrics with explicit availability rules.
 | Metric | Meaning | Computed when |
 |--------|---------|---------------|
 | **Altitude RMSE** | RMSE of predictor `position_z` vs CSV reference `position_z` | CSV has reference altitude **and** predictor produces `position_z` (1D) |
-| **Apogee Error** | `\|max(predicted_apogee) − max(position_z)\|` from **burnout onward** | CSV has reference `position_z` and burnout detectable from `velocity_z` |
+| **Apogee Error** | `\|max(predicted_apogee) − max(position_z)\|` from **burnout onward** | Reference altitude present and burnout detectable from `velocity_z` |
+| **Target Error** | `\|max(altitude) − target_apogee\|` — how far achieved apogee is from the setpoint | `target_apogee` provided (PDController) |
+| **OR Apogee Error** | `\|max(achieved altitude) − max(CSV position_z)\|` — closed-loop plant vs OpenRocket reference | CSV loaded with `position_z` |
 | **Max Overshoot** | `max(0, control − 1)` — control signal above full deployment | Active controller (not `NoController`) |
 | **Exec Time** | Mean / max loop time per step [ms] | Always |
 
@@ -192,11 +220,32 @@ Plot checkboxes (combinable):
 
 Typical outcomes:
 
-| Scenario | Altitude RMSE | Apogee Error | Max Overshoot |
-|----------|---------------|--------------|---------------|
-| 1D, pressures only | N/A | N/A | N/A |
-| 1D eval (`apogee_1d_eval`) | value | value | N/A |
-| 3D | N/A | value | N/A |
+| Scenario | Altitude RMSE | Apogee Error | Target Error | Max Overshoot |
+|----------|---------------|--------------|--------------|---------------|
+| 1D, pressures only | N/A | N/A | N/A | N/A |
+| 1D eval (`apogee_1d_eval`) | value | value | N/A | N/A |
+| 3D + NoController | N/A | value | N/A | N/A |
+| 3D + PDController | N/A | value | value | value |
+
+## PD calibration (YAML test suites)
+
+Tuning scenarios live in [`data/calibration/scenarios.yaml`](data/calibration/scenarios.yaml). Structure:
+
+- **`flights`** — booster CSV paths (OpenRocket `apogee_3d` profile)
+- **`sil_presets`** — named Coast SIL disturbances (plant-only)
+- **`test_cases`** — `flight` + `sil` preset
+- **`suites`** — groups of `test_cases` for batch validation
+
+**GUI:** sidebar **Calibrate…** opens tabs for Run (batch suite + PD source), Tune (`tune_pd.py`), Scenarios (YAML editor), and Guides. Results go to `data/calibration/results/gui_validation.json`.
+
+**CLI:**
+
+```bash
+python scripts/tune_pd.py              # Monte Carlo PD grid (reads YAML defaults)
+python scripts/validate_pd.py --suite validation
+```
+
+See [`data/calibration/README.md`](data/calibration/README.md) for physics prerequisites (body cross section 12.6 cm), why `tuning_target_apogee_m` differs from mission target, and that pre-fix tune results are stale.
 
 ## SOLID Mapping
 
