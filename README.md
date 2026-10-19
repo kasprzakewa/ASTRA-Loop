@@ -2,6 +2,8 @@
 
 Software-in-the-Loop (SITL) environment for testing apogee predictors and airbrake controllers on experimental rocket flight data.
 
+![ASTRA-Loop GUI](docs/gui_screenshot.png)
+
 ## Requirements
 
 - Python 3.10+
