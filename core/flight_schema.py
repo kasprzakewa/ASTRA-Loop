@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-CANONICAL_COLUMNS: tuple[str, ...] = (
+CANONICAL_COLUMNS: tuple[str, Any] = (
     "time",
     "position_x",
     "position_y",

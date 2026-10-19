@@ -21,6 +21,8 @@ class EMAFilter(Filter):
             if key not in self._state:
                 self._state[key] = float(value)
             else:
-                self._state[key] = self._alpha * float(value) + (1.0 - self._alpha) * self._state[key]
+                self._state[key] = (
+                    self._alpha * float(value) + (1.0 - self._alpha) * self._state[key]
+                )
             output[key] = self._state[key]
         return output

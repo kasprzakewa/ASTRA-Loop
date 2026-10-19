@@ -6,10 +6,10 @@ from typing import Literal
 
 CoastSolver = Literal["euler", "rk4"]
 
-SERVO_ANGLE_SAFE_DEG = 90.0
-SERVO_ANGLE_OPEN_DEG = 30.0
+SERVO_ANGLE_SAFE_DEG = 0.0  # brakes fully retracted
+SERVO_ANGLE_OPEN_DEG = 60.0  # brakes fully deployed
 BODY_DIAMETER_M = 0.126
-BODY_CROSS_SECTION_M2 = math.pi * (BODY_DIAMETER_M / 2.0) ** 2  # sync firmware/astra/physics.h
+BODY_CROSS_SECTION_M2 = math.pi * (BODY_DIAMETER_M / 2.0) ** 2
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class ModelParams:
     density_exponent: float = 4.256
     g: float = 9.80665
     default_cross_section: float = BODY_CROSS_SECTION_M2
-    default_mass: float = 12.57
+    default_mass: float = 10.453
     default_drag_coefficient: float = 0.42
     brake_drag_coefficient: float = 1.2
     temperature_gradient: float = -0.0065
@@ -40,9 +40,7 @@ def control_to_servo_angle(u: float) -> float:
     if value != value:
         return servo_angle_safe_deg()
     u_clamped = max(0.0, min(1.0, value))
-    return SERVO_ANGLE_SAFE_DEG + u_clamped * (
-        SERVO_ANGLE_OPEN_DEG - SERVO_ANGLE_SAFE_DEG
-    )
+    return SERVO_ANGLE_SAFE_DEG + u_clamped * (SERVO_ANGLE_OPEN_DEG - SERVO_ANGLE_SAFE_DEG)
 
 
 def calculate_altitude(pressure: float, params: ModelParams) -> float:
@@ -89,7 +87,9 @@ def calculate_drag_coefficient(speed: float, altitude: float, params: ModelParam
 
 
 def calculate_brake_area(servo_angle: float) -> float:
-    brake_cross_section_mm2 = 0.1512 * servo_angle**2 - 124.74 * servo_angle + 9996.8
+    # p(α) = π*((63 + α/4)² - 3969) mm²; α=0 hidden, α=60 fully open
+    radius_mm = 63.0 + float(servo_angle) / 4.0
+    brake_cross_section_mm2 = math.pi * (radius_mm * radius_mm - 3969.0)
     return max(brake_cross_section_mm2, 0.0) * 1e-6
 
 
@@ -106,7 +106,7 @@ def _coast_derivatives(
     wind_speed: float = 0.0,
     wind_vertical: float = 0.0,
 ) -> tuple[float, float, float]:
-    """Return (dz/dt, dvz/dt, dv_h/dt) for coast with air-relative quadratic drag."""
+    """Return (dz/dt, dvz/dt, dv_h/dt) for coast with air-relative quadratic drag"""
     v_rel_h = v_h - wind_speed
     v_rel_z = vz - wind_vertical
     speed_air = math.sqrt(v_rel_z * v_rel_z + v_rel_h * v_rel_h)
@@ -132,7 +132,7 @@ def step_coast(
     wind_speed: float = 0.0,
     wind_vertical: float = 0.0,
 ) -> tuple[float, float, float]:
-    """Advance coast dynamics by one integration step. Returns (z, vz, v_h)."""
+    """Advance coast dynamics by one integration step. Returns (z, vz, v_h)"""
     if solver == "rk4":
         k1z, k1vz, k1vh = _coast_derivatives(
             z, vz, v_h, params, servo_angle, wind_speed, wind_vertical
@@ -187,7 +187,7 @@ def propagate_coast_to_apogee_euler(
     max_steps: int = 100_000,
     servo_angle: float = 0.0,
 ) -> tuple[float, float]:
-    """Integrate coast-phase motion with forward Euler until v_z <= 0."""
+    """Integrate coast-phase motion with forward Euler until v_z <= 0"""
     if vz <= 0.0:
         return z, 0.0
 
@@ -209,7 +209,7 @@ def propagate_coast_to_apogee_rk4(
     max_steps: int = 100_000,
     servo_angle: float = 0.0,
 ) -> tuple[float, float]:
-    """Integrate coast-phase motion with classic RK4 until v_z <= 0."""
+    """Integrate coast-phase motion with classic RK4 until v_z <= 0"""
     if vz <= 0.0:
         return z, 0.0
 

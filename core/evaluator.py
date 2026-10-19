@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Type
 
 import numpy as np
 
@@ -36,8 +35,8 @@ class Evaluator:
         self,
         result: SimulationResult,
         *,
-        predictor_cls: Type[Predictor],
-        controller_cls: Type[Controller],
+        predictor_cls: type[Predictor],
+        controller_cls: type[Controller],
         target_apogee: float | None = None,
         reference_apogee: float | None = None,
     ) -> EvaluationMetrics:

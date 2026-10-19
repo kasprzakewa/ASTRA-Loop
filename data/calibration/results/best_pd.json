@@ -1,9 +1,0 @@
-{
-  "target_apogee": 2200.0,
-  "kp": 0.1,
-  "kd": 0.0,
-  "error_deadband": 10.0,
-  "score": 11.317275631228709,
-  "mean_target_error": 7.536667446994973,
-  "p95_target_error": 9.999899887176934
-}

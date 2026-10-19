@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert an OpenRocket simulation CSV export to ASTRA-Loop format."""
+"""Convert an OpenRocket simulation CSV export to ASTRA-Loop format"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ RowTransform = Callable[[Row], Row]
 
 @dataclass(frozen=True)
 class OpenRocketProfile:
-    """Maps one OpenRocket export layout to ASTRA canonical CSV columns."""
+    """Maps one OpenRocket export layout to ASTRA canonical CSV columns"""
 
     name: str
     description: str
@@ -40,7 +40,7 @@ def _normalize_label(label: str) -> str:
 
 
 def _pressures_from_openrocket(air_pressure_mbar: float, mach: float) -> tuple[float, float]:
-    """Static + total pressure [Pa] from OpenRocket mbar and Mach (gamma = 1.4)."""
+    """Static + total pressure [Pa] from OpenRocket mbar and Mach (gamma = 1.4)"""
     static_pressure = air_pressure_mbar * 100.0
     total_pressure = static_pressure * math.pow(1.0 + 0.2 * mach * mach, 3.5)
     return static_pressure, total_pressure
@@ -119,24 +119,43 @@ OPENROCKET_PROFILES: dict[str, OpenRocketProfile] = {
 }
 
 
-def _parse_header_comment(line: str, profile: OpenRocketProfile) -> list[str] | None:
+def _detect_delimiter(text: str) -> str:
+    """Pick comma or semicolon based on which appears more in a CSV line"""
+    semicolons = text.count(";")
+    commas = text.count(",")
+    if semicolons > commas:
+        return ";"
+    return ","
+
+
+def _parse_header_index_map(
+    line: str,
+    profile: OpenRocketProfile,
+    delimiter: str,
+) -> dict[str, int] | None:
+    """Map ASTRA field names to source column indices from a # header line"""
     match = re.match(r"^#\s*(.+)$", line.strip())
     if match is None:
         return None
 
-    parts = [part.strip() for part in match.group(1).split(",")]
-    if len(parts) != len(profile.column_map):
+    label_to_internal = {
+        _normalize_label(label): internal for label, internal in profile.column_map.items()
+    }
+    index_map: dict[str, int] = {}
+    for index, part in enumerate(part.strip() for part in match.group(1).split(delimiter)):
+        internal = label_to_internal.get(_normalize_label(part))
+        if internal is not None:
+            index_map[internal] = index
+
+    expected = set(profile.column_map.values())
+    if set(index_map.keys()) != expected:
         return None
-
-    mapped = [profile.column_map.get(_normalize_label(part)) for part in parts]
-    if any(name is None for name in mapped):
-        return None
-    return mapped
+    return index_map
 
 
-def _parse_data_row(line: str) -> list[float] | None:
+def _parse_data_row(line: str, delimiter: str) -> list[float] | None:
     try:
-        return [float(value.strip()) for value in line.split(",")]
+        return [float(value.strip()) for value in line.split(delimiter)]
     except ValueError:
         return None
 
@@ -148,7 +167,8 @@ def convert_openrocket_csv(source: Path, destination: Path, *, profile: str) -> 
         available = ", ".join(sorted(OPENROCKET_PROFILES))
         raise ValueError(f"Unknown profile {profile!r}. Available: {available}") from exc
 
-    source_columns: list[str] | None = None
+    delimiter = ","
+    column_index_map: dict[str, int] | None = None
     raw_rows: list[list[float]] = []
 
     with source.open(encoding="utf-8") as handle:
@@ -157,29 +177,35 @@ def convert_openrocket_csv(source: Path, destination: Path, *, profile: str) -> 
             if not stripped:
                 continue
             if stripped.startswith("#"):
-                if source_columns is None:
-                    source_columns = _parse_header_comment(stripped, mapping)
+                if column_index_map is None:
+                    delimiter = _detect_delimiter(stripped)
+                    column_index_map = _parse_header_index_map(
+                        stripped,
+                        mapping,
+                        delimiter,
+                    )
                 continue
 
-            values = _parse_data_row(stripped)
+            if not raw_rows and column_index_map is None:
+                delimiter = _detect_delimiter(stripped)
+
+            values = _parse_data_row(stripped, delimiter)
             if values is not None:
                 raw_rows.append(values)
 
     expected_columns = tuple(mapping.column_map.values())
-    columns = source_columns or list(expected_columns)
-    if tuple(columns) != expected_columns:
-        raise ValueError(
-            f"Header columns {columns!r} do not match profile {profile!r}. "
-            f"Expected {list(expected_columns)!r}."
-        )
+    if column_index_map is None:
+        column_index_map = {name: index for index, name in enumerate(expected_columns)}
 
     rows: list[Row] = []
     for values in raw_rows:
-        if len(values) != len(columns):
+        try:
+            row = {name: values[column_index_map[name]] for name in expected_columns}
+        except IndexError as exc:
             raise ValueError(
-                f"Expected {len(columns)} values, got {len(values)} in row: {values!r}"
-            )
-        row = dict(zip(columns, values, strict=True))
+                f"Expected at least {max(column_index_map.values()) + 1} values, "
+                f"got {len(values)} in row: {values!r}"
+            ) from exc
         rows.append(mapping.convert_row(row))
 
     if not rows:

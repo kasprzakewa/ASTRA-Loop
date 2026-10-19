@@ -11,8 +11,8 @@ class Filter(ABC):
 
     @abstractmethod
     def reset(self) -> None:
-        ...
+        pass
 
     @abstractmethod
     def update(self, measurement: dict[str, Any]) -> dict[str, Any]:
-        ...
+        pass

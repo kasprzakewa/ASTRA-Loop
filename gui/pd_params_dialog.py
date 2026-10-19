@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from dataclasses import fields
 from tkinter import messagebox
-from typing import Callable
 
 import customtkinter as ctk
 
@@ -42,8 +42,8 @@ class PDParamsDialog(ctk.CTkToplevel):
         self._entries: dict[str, ctk.CTkEntry] = {}
 
         self.title("PD Controller Parameters")
-        self.geometry("460x400")
-        self.minsize(460, 400)
+        self.geometry("460x380")
+        self.minsize(460, 380)
         self.resizable(True, False)
         self.configure(fg_color=BG_DARK)
         self.transient(parent)
@@ -100,7 +100,9 @@ class PDParamsDialog(ctk.CTkToplevel):
 
             label = ctk.CTkLabel(
                 row,
-                text=_FIELD_LABELS.get(model_field.name, model_field.name.replace("_", " ").title()),
+                text=_FIELD_LABELS.get(
+                    model_field.name, model_field.name.replace("_", " ").title()
+                ),
                 width=200,
                 anchor="w",
                 text_color=TEXT_MUTED,

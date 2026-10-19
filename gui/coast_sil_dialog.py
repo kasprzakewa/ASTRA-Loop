@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from tkinter import messagebox
-from typing import Callable
 
 import customtkinter as ctk
 

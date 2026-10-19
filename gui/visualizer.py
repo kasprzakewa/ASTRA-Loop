@@ -132,7 +132,7 @@ class Visualizer:
             ax.text(
                 0.5,
                 0.5,
-                "No servo angle data\n(load MCU log)",
+                "No servo angle data",
                 transform=ax.transAxes,
                 ha="center",
                 va="center",

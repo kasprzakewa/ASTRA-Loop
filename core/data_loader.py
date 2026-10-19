@@ -39,7 +39,7 @@ class DataLoader:
         return self.data.to_dict(orient="records")
 
     def reference_apogee(self) -> float | None:
-        """Max OpenRocket altitude [m] when position_z is present in the loaded CSV."""
+        """Max OpenRocket altitude [m] when position_z is present in the loaded CSV"""
         if self._data is None or "position_z" not in self._data.columns:
             return None
         values = self._data["position_z"].dropna()

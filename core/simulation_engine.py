@@ -16,6 +16,7 @@ from core.flight_schema import get_field, lateral_velocity_sq
 from core.physics_utils import control_to_servo_angle, step_coast
 from core.predictors.base import Predictor
 
+
 @dataclass
 class SimulationResult:
     time: list[float] = field(default_factory=list)
@@ -123,15 +124,13 @@ def slice_to_apogee(result: SimulationResult) -> SimulationResult:
 
 
 def report_first_brake_open(result: SimulationResult, *, eps: float = 1e-6) -> None:
-    """Print vz at the first non-zero control signal (first brake open)."""
+    """Print vz at the first non-zero control signal (first brake open)"""
     for i, u in enumerate(result.logged_control_signal):
         if abs(u) > eps:
             t = result.time[i] if i < len(result.time) else float("nan")
             vz = result.logged_velocity[i] if i < len(result.logged_velocity) else float("nan")
             z = result.logged_altitude[i] if i < len(result.logged_altitude) else float("nan")
-            print(
-                f"First brake open: t={t:.3f} s, vz={vz:.2f} m/s, z={z:.1f} m, u={u:.4f}"
-            )
+            print(f"First brake open: t={t:.3f} s, vz={vz:.2f} m/s, z={z:.1f} m, u={u:.4f}")
             return
     print("First brake open: never (control_u stayed 0)")
 
@@ -165,13 +164,13 @@ class SimulationEngine:
         self._plant_cd_scale = plant_cd_scale if plant_cd_scale > 0.0 else 1.0
 
     def _disturbance_now(self) -> tuple[float, float]:
-        """Return (horizontal_wind, vertical_gust) for the plant only."""
+        """Return (horizontal_wind, vertical_gust) for the plant only"""
         if self._gust_strength <= 0.0:
             return self._wind_speed, 0.0
         sample = self._wind_rng.uniform(-self._gust_strength, self._gust_strength)
         self._gust_vertical = (
-            (1.0 - self._gust_alpha) * self._gust_vertical + self._gust_alpha * sample
-        )
+            1.0 - self._gust_alpha
+        ) * self._gust_vertical + self._gust_alpha * sample
         return self._wind_speed, self._gust_vertical
 
     def run(self, *, report_brake_stats: bool = True) -> SimulationResult:

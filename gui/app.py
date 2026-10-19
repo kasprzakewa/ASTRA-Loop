@@ -5,7 +5,6 @@ import tkinter as tk
 from dataclasses import asdict
 from pathlib import Path
 from tkinter import filedialog, messagebox
-from typing import Type
 
 import customtkinter as ctk
 
@@ -15,14 +14,12 @@ from core.data_loader import DataLoader
 from core.evaluator import EvaluationMetrics, Evaluator
 from core.filters.base import Filter
 from core.flight_schema import collect_validation_errors
-from core.mcu_flight_log import first_brake_open, load_flash_dump, records_to_simulation_result
 from core.physics_utils import ModelParams
 from core.predictors.base import Predictor
 from core.registry import discover_plugins
 from core.simulation_engine import SimulationEngine, SimulationResult
-from gui.error_dialog import ErrorDialog
-from gui.calibrate_dialog import open_calibrate_dialog
 from gui.coast_sil_dialog import CoastSilParams, CoastSilParamsDialog
+from gui.error_dialog import ErrorDialog
 from gui.params_dialog import ModelParamsDialog
 from gui.pd_params_dialog import PDParamsDialog
 from gui.theme import (
@@ -100,13 +97,19 @@ class AstraApp(ctk.CTk):
 
         self._build_csv_box(scroll)
 
-        self._filter_var = tk.StringVar(value=self._default_key(self._filters, preferred="NoFilter"))
+        self._filter_var = tk.StringVar(
+            value=self._default_key(self._filters, preferred="NoFilter")
+        )
         self._predictor_var = tk.StringVar(value=self._default_key(self._predictors))
         self._solver_var = tk.StringVar(value="euler")
-        self._controller_var = tk.StringVar(value=self._default_key(self._controllers, preferred="NoController"))
+        self._controller_var = tk.StringVar(
+            value=self._default_key(self._controllers, preferred="NoController")
+        )
 
         filter_options = sorted(self._filters.keys(), key=lambda name: (name != "NoFilter", name))
-        controller_options = sorted(self._controllers.keys(), key=lambda name: (name != "NoController", name))
+        controller_options = sorted(
+            self._controllers.keys(), key=lambda name: (name != "NoController", name)
+        )
         self._add_selector(scroll, "Filter", self._filter_var, filter_options)
         _, _, self._predictor_settings_btn, _ = self._add_selector(
             scroll,
@@ -144,18 +147,6 @@ class AstraApp(ctk.CTk):
             text_color=TEXT_PRIMARY,
         )
         self._params_btn.pack(padx=16, pady=(8, 4), fill="x")
-
-        self._calibrate_btn = ctk.CTkButton(
-            scroll,
-            text="Calibrate…",
-            command=self._open_calibrate_dialog,
-            fg_color=SURFACE_GRAY,
-            hover_color=DROPDOWN_HOVER,
-            border_width=1,
-            border_color=GRID_COLOR,
-            text_color=TEXT_PRIMARY,
-        )
-        self._calibrate_btn.pack(padx=16, pady=(4, 4), fill="x")
 
         self._show_from_burnout_var = tk.BooleanVar(value=False)
         self._show_from_burnout_cb = ctk.CTkCheckBox(
@@ -199,7 +190,9 @@ class AstraApp(ctk.CTk):
         self._build_metrics_box(scroll)
 
     def _build_csv_box(self, parent: ctk.CTkFrame) -> None:
-        box = ctk.CTkFrame(parent, fg_color=SURFACE_GRAY, corner_radius=8, border_width=1, border_color=GRID_COLOR)
+        box = ctk.CTkFrame(
+            parent, fg_color=SURFACE_GRAY, corner_radius=8, border_width=1, border_color=GRID_COLOR
+        )
         box.pack(padx=16, pady=(0, 16), fill="x")
 
         ctk.CTkLabel(
@@ -228,22 +221,12 @@ class AstraApp(ctk.CTk):
             height=32,
             corner_radius=WIDGET_CORNER_RADIUS,
         )
-        self._load_btn.pack(padx=12, pady=(0, 6), fill="x")
-
-        self._load_mcu_btn = ctk.CTkButton(
-            box,
-            text="Load MCU Log…",
-            command=self._on_load_mcu_log,
-            fg_color=DROPDOWN_GRAY,
-            hover_color=DROPDOWN_HOVER,
-            text_color=TEXT_PRIMARY,
-            height=32,
-            corner_radius=WIDGET_CORNER_RADIUS,
-        )
-        self._load_mcu_btn.pack(padx=12, pady=(0, 12), fill="x")
+        self._load_btn.pack(padx=12, pady=(0, 12), fill="x")
 
     def _build_metrics_box(self, parent: ctk.CTkFrame) -> None:
-        box = ctk.CTkFrame(parent, fg_color=SURFACE_GRAY, corner_radius=8, border_width=1, border_color=GRID_COLOR)
+        box = ctk.CTkFrame(
+            parent, fg_color=SURFACE_GRAY, corner_radius=8, border_width=1, border_color=GRID_COLOR
+        )
         box.pack(padx=16, pady=(8, 24), fill="x")
 
         ctk.CTkLabel(
@@ -298,7 +281,9 @@ class AstraApp(ctk.CTk):
 
             if LOGO_PATH.is_file():
                 pil_image = Image.open(LOGO_PATH)
-                self._logo_image = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=LOGO_SIZE)
+                self._logo_image = ctk.CTkImage(
+                    light_image=pil_image, dark_image=pil_image, size=LOGO_SIZE
+                )
                 ctk.CTkLabel(logo_frame, image=self._logo_image, text="").pack()
                 return
         except Exception:
@@ -370,7 +355,7 @@ class AstraApp(ctk.CTk):
     def _on_controller_changed(self, _value: str | None = None) -> None:
         self._update_settings_icons()
 
-    def _selected_predictor_cls(self) -> Type[Predictor] | None:
+    def _selected_predictor_cls(self) -> type[Predictor] | None:
         return self._predictors.get(self._predictor_var.get())
 
     def _predictor_supports_closed_loop(self) -> bool:
@@ -411,7 +396,7 @@ class AstraApp(ctk.CTk):
         b = int(hex_color[5:7], 16)
         return f"#{int(r * factor):02x}{int(g * factor):02x}{int(b * factor):02x}"
 
-    def _default_key(self, registry: dict[str, Type], preferred: str | None = None) -> str:
+    def _default_key(self, registry: dict[str, type], preferred: str | None = None) -> str:
         if preferred and preferred in registry:
             return preferred
         if not registry:
@@ -436,20 +421,11 @@ class AstraApp(ctk.CTk):
     def _on_coast_sil_saved(self, params: CoastSilParams) -> None:
         self._coast_sil_params = params
 
-    def _open_calibrate_dialog(self) -> None:
-        open_calibrate_dialog(
-            self,
-            model_params=self._model_params,
-            pd_params=self._pd_params,
-            on_load_csv=self._load_csv_path,
-            on_pd_apply=self._on_pd_params_saved,
-        )
-
     def _load_csv_path(self, path: Path) -> None:
         self._data_loader.load_csv(path)
         self._file_label.configure(text=path.name, text_color=TEXT_PRIMARY)
 
-    def _create_predictor(self, predictor_cls: Type[Predictor]) -> Predictor:
+    def _create_predictor(self, predictor_cls: type[Predictor]) -> Predictor:
         signature = inspect.signature(predictor_cls.__init__)
         kwargs: dict[str, object] = {}
         if "params" in signature.parameters:
@@ -458,7 +434,7 @@ class AstraApp(ctk.CTk):
             kwargs["solver"] = self._solver_var.get()
         return predictor_cls(**kwargs)  # type: ignore[arg-type]
 
-    def _create_controller(self, controller_cls: Type[Controller]) -> Controller:
+    def _create_controller(self, controller_cls: type[Controller]) -> Controller:
         if issubclass(controller_cls, PDController):
             return controller_cls(**asdict(self._pd_params))
         return controller_cls()
@@ -476,41 +452,6 @@ class AstraApp(ctk.CTk):
         except Exception as exc:
             messagebox.showerror("Load Error", f"Failed to load CSV:\n{exc}")
 
-    def _on_load_mcu_log(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select MCU flash dump",
-            filetypes=[("Flash dump", "*.bin"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-
-        try:
-            records = load_flash_dump(path)
-            result = records_to_simulation_result(records)
-            self._last_result = result
-            self._file_label.configure(text=Path(path).name, text_color=TEXT_PRIMARY)
-            self._refresh_plots()
-            hit = first_brake_open(records)
-            if hit is None:
-                brake_line = "First brake: never (u=0)"
-            else:
-                brake_line = (
-                    f"First brake: t={hit.time_s:.2f}s, "
-                    f"vz={hit.velocity_z:.1f} m/s, u={hit.control_u:.3f}"
-                )
-            self._set_metrics_text(
-                (
-                    f"MCU log loaded.\nSamples: {len(result.time)}\n"
-                    f"Duration: {result.time[-1] - result.time[0]:.2f} s\n"
-                    f"{brake_line}"
-                )
-                if result.time
-                else "MCU log loaded (empty).",
-                highlight=True,
-            )
-        except Exception as exc:
-            messagebox.showerror("Load Error", f"Failed to load MCU log:\n{exc}")
-
     def _on_run_simulation(self) -> None:
         if not self._data_loader.is_loaded:
             messagebox.showwarning("No Data", "Load a CSV file before running the simulation.")
@@ -521,7 +462,9 @@ class AstraApp(ctk.CTk):
         controller_cls = self._controllers.get(self._controller_var.get())
 
         if not all([filter_cls, predictor_cls, controller_cls]):
-            messagebox.showerror("Configuration Error", "Select valid filter, predictor, and controller.")
+            messagebox.showerror(
+                "Configuration Error", "Select valid filter, predictor, and controller."
+            )
             return
 
         validation_errors = collect_validation_errors(

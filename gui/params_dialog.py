@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from dataclasses import fields
 from tkinter import messagebox
-from typing import Callable
 
 import customtkinter as ctk
 
@@ -64,7 +64,9 @@ class ModelParamsDialog(ctk.CTkToplevel):
             )
             label.pack(side="left")
 
-            entry = ctk.CTkEntry(row, fg_color=FRAME_BORDER, border_color=GRID_COLOR, text_color=TEXT_PRIMARY)
+            entry = ctk.CTkEntry(
+                row, fg_color=FRAME_BORDER, border_color=GRID_COLOR, text_color=TEXT_PRIMARY
+            )
             entry.insert(0, str(getattr(params, model_field.name)))
             entry.pack(side="right", fill="x", expand=True)
             self._entries[model_field.name] = entry

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
-
 import customtkinter as ctk
 
 from gui.theme import (
-    ACCENT_ORANGE,
     ACCENT_PINK,
     BG_DARK,
     DROPDOWN_HOVER,
